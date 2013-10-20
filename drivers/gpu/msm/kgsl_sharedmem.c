@@ -553,7 +553,7 @@ _kgsl_sharedmem_page_alloc(struct kgsl_memdesc *memdesc,
 	 * Change memory allocation size to 4K from 64K
 	 * Sluggish Problem
 	 */
-#if 0
+#if 1
 	page_size = (align >= ilog2(SZ_64K) && size >= SZ_64K)
 			? SZ_64K : PAGE_SIZE;
 #else
@@ -613,16 +613,22 @@ _kgsl_sharedmem_page_alloc(struct kgsl_memdesc *memdesc,
 
 	while (len > 0) {
 		struct page *page;
-		unsigned int gfp_mask = GFP_KERNEL | __GFP_HIGHMEM |
-			__GFP_NOWARN;
+		unsigned int gfp_mask = __GFP_HIGHMEM;
 		int j;
 
 		/* don't waste space at the end of the allocation*/
 		if (len < page_size)
 			page_size = PAGE_SIZE;
 
+		/*
+		 * Don't do some of the more aggressive memory recovery
+		 * techniques for large order allocations
+		 */
 		if (page_size != PAGE_SIZE)
-			gfp_mask |= __GFP_COMP;
+			gfp_mask |= __GFP_COMP | __GFP_NORETRY |
+				__GFP_NO_KSWAPD | __GFP_NOWARN;
+		else
+			gfp_mask |= GFP_KERNEL;
 
 		page = alloc_pages(gfp_mask, get_order(page_size));
 

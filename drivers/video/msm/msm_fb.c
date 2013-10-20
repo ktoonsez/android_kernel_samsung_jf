@@ -125,8 +125,8 @@ static int msm_fb_pan_idle(struct msm_fb_data_type *mfd);
 #define MSM_FB_MAX_DBGFS 1024
 #define MAX_BACKLIGHT_BRIGHTNESS 255
 
-#define WAIT_FENCE_FIRST_TIMEOUT MSEC_PER_SEC
-#define WAIT_FENCE_FINAL_TIMEOUT 10 * MSEC_PER_SEC
+#define WAIT_FENCE_FIRST_TIMEOUT (3 * MSEC_PER_SEC)
+#define WAIT_FENCE_FINAL_TIMEOUT (10 * MSEC_PER_SEC)
 /* Display op timeout should be greater than total timeout */
 #define WAIT_DISP_OP_TIMEOUT (WAIT_FENCE_FIRST_TIMEOUT +\
         WAIT_FENCE_FINAL_TIMEOUT) * MDP_MAX_FENCE_FD
@@ -138,7 +138,7 @@ struct dentry *msm_fb_debugfs_file[MSM_FB_MAX_DBGFS];
 static int bl_scale, bl_min_lvl;
 
 DEFINE_MUTEX(msm_fb_notify_update_sem);
-DEFINE_MUTEX(power_state_chagne);
+static DEFINE_MUTEX(power_state_chagne);
 
 void msmfb_no_update_notify_timer_cb(unsigned long data)
 {
@@ -1392,8 +1392,7 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 	var->xres = panel_info->xres;
 	var->yres = panel_info->yres;
 	
-#if defined	(CONFIG_FB_MSM_MIPI_SAMSUNG_OCTA_VIDEO_FULL_HD_PT) \
-	|| defined (CONFIG_FB_MSM_MIPI_RENESAS_TFT_VIDEO_FULL_HD_PT_PANEL)
+#ifdef CONFIG_FB_MSM_MIPI_SAMSUNG_OCTA_VIDEO_FULL_HD_PT
 	var->height = panel_info->height; /* height of picture in mm*/
 	var->width = panel_info->width; /* width of picture in mm*/
 #else
@@ -1940,6 +1939,19 @@ static int msm_fb_pan_display_ex(struct fb_info *info,
 	return ret;
 }
 
+static inline int rt_policy(int policy)
+{
+	if (unlikely(policy == SCHED_FIFO) ||
+	    unlikely(policy == SCHED_RR))
+		return 1;
+	return 0;
+}
+
+static inline int task_has_rt_policy(struct task_struct *p)
+{
+	return rt_policy(p->policy);
+}
+
 static int msm_fb_pan_display(struct fb_var_screeninfo *var,
 			      struct fb_info *info)
 {
@@ -1953,6 +1965,7 @@ static int msm_fb_pan_display(struct fb_var_screeninfo *var,
 static int msm_fb_pan_display_sub(struct fb_var_screeninfo *var,
 			      struct fb_info *info)
 {
+	struct sched_param s = { .sched_priority = 1 };
 	struct mdp_dirty_region dirty;
 	struct mdp_dirty_region *dirtyPtr = NULL;
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
@@ -1965,6 +1978,14 @@ static int msm_fb_pan_display_sub(struct fb_var_screeninfo *var,
 		pr_err("%s: no pan display for fb%d!",
 		       __func__, info->node);
 		return -EPERM;
+	}
+
+	if (!task_has_rt_policy(current)) {
+		struct cred *new = prepare_creds();
+		cap_raise(new->cap_effective, CAP_SYS_NICE);
+		commit_creds(new);
+		if ((sched_setscheduler(current, SCHED_RR, &s)) < 0)
+			pr_err("sched_setscheduler failed\n");
 	}
 
 	if (info->node != 0 || mfd->cont_splash_done)	/* primary */
@@ -3752,6 +3773,23 @@ static int msmfb_display_commit(struct fb_info *info,
 	return ret;
 }
 
+static int msmfb_get_metadata(struct msm_fb_data_type *mfd,
+				struct msmfb_metadata *metadata_ptr)
+{
+	int ret = 0;
+	switch (metadata_ptr->op) {
+	case metadata_op_frame_rate:
+		metadata_ptr->data.panel_frame_rate =
+			mdp_get_panel_framerate(mfd);
+		break;
+	default:
+		pr_warn("Unsupported request to MDP META IOCTL.\n");
+		ret = -EINVAL;
+		break;
+	}
+	return ret;
+}
+
 static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 			unsigned long arg)
 {
@@ -3770,6 +3808,7 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 	struct mdp_page_protection fb_page_protection;
 	struct msmfb_mdp_pp mdp_pp;
 	struct mdp_buf_sync buf_sync;
+	struct msmfb_metadata mdp_metadata;
 	int ret = 0;
 	msm_fb_pan_idle(mfd);
 
@@ -4079,6 +4118,17 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 		sec_debug_mdp_set_value(SEC_DEBUG_DISPLAY_COMMIT, SEC_DEBUG_IN);
 		ret = msmfb_display_commit(info, argp);
 		sec_debug_mdp_set_value(SEC_DEBUG_DISPLAY_COMMIT, SEC_DEBUG_OUT);
+		break;
+
+	case MSMFB_METADATA_GET:
+		ret = copy_from_user(&mdp_metadata, argp, sizeof(mdp_metadata));
+		if (ret)
+			return ret;
+		ret = msmfb_get_metadata(mfd, &mdp_metadata);
+		if (!ret)
+			ret = copy_to_user(argp, &mdp_metadata,
+				sizeof(mdp_metadata));
+
 		break;
 
 	default:

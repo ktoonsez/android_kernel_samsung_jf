@@ -1,4 +1,4 @@
-/* Copyright (c) 2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -68,6 +68,20 @@ struct platform_device msm8930_pc_cntr = {
 	.id		= -1,
 	.num_resources	= ARRAY_SIZE(msm8930_resources_pccntr),
 	.resource	= msm8930_resources_pccntr,
+};
+
+static struct msm_pm_sleep_status_data msm_pm_slp_sts_data = {
+	.base_addr = MSM_ACC0_BASE + 0x08,
+	.cpu_offset = MSM_ACC1_BASE - MSM_ACC0_BASE,
+	.mask = 1UL << 13,
+};
+
+struct platform_device msm8930_cpu_slp_status = {
+	.name		= "cpu_slp_status",
+	.id		= -1,
+	.dev = {
+		.platform_data = &msm_pm_slp_sts_data,
+	},
 };
 
 struct msm_rpm_platform_data msm8930_rpm_data __initdata = {
@@ -1138,6 +1152,7 @@ struct msm_vidc_platform_data apq8930_vidc_platform_data = {
 	.disable_fullhd = 0,
 	.cont_mode_dpb_count = 18,
 	.fw_addr = 0x9fe00000,
+	.enable_sec_metadata = 0,
 };
 
 struct platform_device apq8930_msm_device_vidc = {

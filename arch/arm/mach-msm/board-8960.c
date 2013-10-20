@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -157,7 +157,7 @@ struct sx150x_platform_data msm8960_sx150x_data[] = {
 #define MSM_ION_MM_SIZE            0x3800000 /* Need to be multiple of 64K */
 #define MSM_ION_SF_SIZE            0x0
 #define MSM_ION_QSECOM_SIZE        0x780000 /* (7.5MB) */
-#define MSM_ION_HEAP_NUM	7
+#define MSM_ION_HEAP_NUM	8
 #else
 #define MSM_ION_MM_SIZE            MSM_PMEM_ADSP_SIZE
 #define MSM_ION_SF_SIZE            MSM_PMEM_SIZE
@@ -177,6 +177,7 @@ struct sx150x_platform_data msm8960_sx150x_data[] = {
 							HOLE_SIZE))
 #define MAX_FIXED_AREA_SIZE	0x10000000
 #define MSM8960_FW_START	MSM8960_FIXED_AREA_START
+#define MSM_ION_ADSP_SIZE	SZ_8M
 
 static unsigned msm_ion_sf_size = MSM_ION_SF_SIZE;
 #else
@@ -402,6 +403,15 @@ static struct platform_device ion_mm_heap_device = {
 	}
 };
 
+static struct platform_device ion_adsp_heap_device = {
+	.name = "ion-adsp-heap-device",
+	.id = -1,
+	.dev = {
+		.dma_mask = &msm_dmamask,
+		.coherent_dma_mask = DMA_BIT_MASK(32),
+	}
+};
+
 /**
  * These heaps are listed in the order they will be allocated. Due to
  * video hardware restrictions and content protection the FW heap has to
@@ -475,6 +485,15 @@ struct ion_platform_heap msm8960_heaps[] = {
 			.size	= MSM_ION_AUDIO_SIZE,
 			.memory_type = ION_EBI_TYPE,
 			.extra_data = (void *) &co_msm8960_ion_pdata,
+		},
+		{
+			.id     = ION_ADSP_HEAP_ID,
+			.type   = ION_HEAP_TYPE_DMA,
+			.name   = ION_ADSP_HEAP_NAME,
+			.size   = MSM_ION_ADSP_SIZE,
+			.memory_type = ION_EBI_TYPE,
+			.extra_data = (void *) &co_msm8960_ion_pdata,
+			.priv	= &ion_adsp_heap_device.dev,
 		},
 #endif
 };
@@ -2623,60 +2642,20 @@ static struct platform_device msm8960_device_rpm_regulator __devinitdata = {
 	},
 };
 #ifdef CONFIG_SERIAL_MSM_HS
-static int configure_uart_gpios(int on)
-{
-	int ret = 0, i;
-	int uart_gpios[] = {93, 94, 95, 96};
-
-	for (i = 0; i < ARRAY_SIZE(uart_gpios); i++) {
-		if (on) {
-			ret = gpio_request(uart_gpios[i], NULL);
-			if (ret) {
-				pr_err("%s: unable to request uart gpio[%d]\n",
-						__func__, uart_gpios[i]);
-				break;
-			}
-		} else {
-			gpio_free(uart_gpios[i]);
-		}
-	}
-
-	if (ret && on && i)
-		for (; i >= 0; i--)
-			gpio_free(uart_gpios[i]);
-	return ret;
-}
-
 static struct msm_serial_hs_platform_data msm_uart_dm9_pdata = {
-	.gpio_config	= configure_uart_gpios,
+	.config_gpio		= 4,
+	.uart_tx_gpio		= 93,
+	.uart_rx_gpio		= 94,
+	.uart_cts_gpio		= 95,
+	.uart_rfr_gpio		= 96,
 };
 
-static int configure_gsbi8_uart_gpios(int on)
-{
-	int ret = 0, i;
-	int uart_gpios[] = {34, 35, 36, 37};
-
-	for (i = 0; i < ARRAY_SIZE(uart_gpios); i++) {
-		if (on) {
-			ret = gpio_request(uart_gpios[i], NULL);
-			if (ret) {
-				pr_err("%s: unable to request uart gpio[%d]\n",
-						__func__, uart_gpios[i]);
-				break;
-			}
-		} else {
-			gpio_free(uart_gpios[i]);
-		}
-	}
-
-	if (ret && on && i)
-		for (; i >= 0; i--)
-			gpio_free(uart_gpios[i]);
-	return ret;
-}
-
 static struct msm_serial_hs_platform_data msm_uart_dm8_pdata = {
-	.gpio_config	= configure_gsbi8_uart_gpios,
+	.config_gpio		= 4,
+	.uart_tx_gpio		= 34,
+	.uart_rx_gpio		= 35,
+	.uart_cts_gpio		= 36,
+	.uart_rfr_gpio		= 37,
 };
 #else
 static struct msm_serial_hs_platform_data msm_uart_dm8_pdata;

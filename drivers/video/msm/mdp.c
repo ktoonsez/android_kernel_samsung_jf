@@ -385,11 +385,13 @@ static int mdp_hist_lut_write_off(struct mdp_hist_lut_data *data,
 		pr_err("%s: Error copying histogram data", __func__);
 		return -ENOMEM;
 	}
+	mdp_clk_ctrl(1);
 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);
 	for (i = 0; i < MDP_HIST_LUT_SIZE; i++)
 		MDP_OUTP(MDP_BASE + base + offset + (0x400*(sel)) + (4*i),
 				element[i]);
 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_OFF, FALSE);
+	mdp_clk_ctrl(0);
 
 	return 0;
 }
@@ -919,6 +921,7 @@ static int mdp_histogram_enable(struct mdp_hist_mgmt *mgmt)
 		return -EINVAL;
 	}
 
+	mdp_clk_ctrl(1);
 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);
 	base = (uint32_t) (MDP_BASE + mgmt->base);
 	/*First make sure that device is not collecting histogram*/
@@ -960,6 +963,7 @@ static int mdp_histogram_enable(struct mdp_hist_mgmt *mgmt)
 	mgmt->mdp_is_hist_init = FALSE;
 	__mdp_histogram_reset(mgmt);
 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_OFF, FALSE);
+	mdp_clk_ctrl(0);
 	return 0;
 }
 
@@ -978,6 +982,7 @@ static int mdp_histogram_disable(struct mdp_hist_mgmt *mgmt)
 
 	base = (uint32_t) (MDP_BASE + mgmt->base);
 
+	mdp_clk_ctrl(1);
 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);
 	spin_lock_irqsave(&mdp_spin_lock, flag);
 	outp32(MDP_INTR_CLEAR, mgmt->intr);
@@ -994,6 +999,7 @@ static int mdp_histogram_disable(struct mdp_hist_mgmt *mgmt)
 
 	MDP_OUTP(base + 0x0018, INTR_HIST_DONE | INTR_HIST_RESET_SEQ_DONE);
 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_OFF, FALSE);
+	mdp_clk_ctrl(0);
 
 	if (mgmt->hist != NULL) {
 		mgmt->hist = NULL;
@@ -1295,12 +1301,14 @@ static void mdp_hist_read_work(struct work_struct *data)
 	if (mgmt->mdp_is_hist_init == FALSE)
 			mgmt->mdp_is_hist_init = TRUE;
 
+	mdp_clk_ctrl(1);
 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);
 	if (!ret && hist_ready)
 		__mdp_histogram_kickoff(mgmt);
 	else
 		__mdp_histogram_reset(mgmt);
 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_OFF, FALSE);
+	mdp_clk_ctrl(0);
 
 error:
 	mutex_unlock(&mgmt->mdp_hist_mutex);
@@ -1477,6 +1485,23 @@ u32 mdp_get_panel_framerate(struct msm_fb_data_type *mfd)
 	u32 frame_rate = 0, pixel_rate = 0, total_pixel;
 	struct msm_panel_info *panel_info = &mfd->panel_info;
 
+	if ((panel_info->type == MIPI_VIDEO_PANEL ||
+	     panel_info->type == MIPI_CMD_PANEL) &&
+	    panel_info->mipi.frame_rate)
+		frame_rate = panel_info->mipi.frame_rate;
+
+	if (mfd->dest == DISPLAY_LCD) {
+		if (panel_info->type == MDDI_PANEL && panel_info->mddi.is_type1)
+			frame_rate = panel_info->lcd.refx100 / (100 * 2);
+		else if (panel_info->type != MIPI_CMD_PANEL)
+			frame_rate = panel_info->lcd.refx100 / 100;
+	}
+	pr_debug("%s type=%d frame_rate=%d\n", __func__,
+		 panel_info->type, frame_rate);
+
+	if (frame_rate)
+		return frame_rate;
+
 	pixel_rate =
 		(panel_info->type == MIPI_CMD_PANEL ||
 		 panel_info->type == MIPI_VIDEO_PANEL) ?
@@ -1500,13 +1525,6 @@ u32 mdp_get_panel_framerate(struct msm_fb_data_type *mfd)
 		frame_rate = pixel_rate / total_pixel;
 	else
 		pr_warn("%s total pixels are zero\n", __func__);
-
-	if (mfd->dest == DISPLAY_LCD) {
-		if (panel_info->type == MDDI_PANEL && panel_info->mddi.is_type1)
-			frame_rate = panel_info->lcd.refx100 / (100 * 2);
-		else if (panel_info->type != MIPI_CMD_PANEL)
-			frame_rate = panel_info->lcd.refx100 / 100;
-	}
 
 	if (frame_rate == 0) {
 		frame_rate = DEFAULT_FRAME_RATE;
@@ -2508,6 +2526,7 @@ static struct msm_bus_paths mdp_bus_usecases[] = {
 		mdp_bus_pong_vectors,
 	},
 };
+
 static struct msm_bus_scale_pdata mdp_bus_scale_table = {
 	.usecase = mdp_bus_usecases,
 	.num_usecases = ARRAY_SIZE(mdp_bus_usecases),
@@ -2518,6 +2537,7 @@ static uint32_t mdp_bus_scale_handle;
 static int mdp_bus_scale_register(void)
 {
 	struct msm_bus_scale_pdata *bus_pdata = &mdp_bus_scale_table;
+
 	if (!mdp_bus_scale_handle) {
 		mdp_bus_scale_handle = msm_bus_scale_register_client(bus_pdata);
 		if (!mdp_bus_scale_handle) {									
@@ -2545,13 +2565,15 @@ int mdp_bus_scale_update_request(u64 ab_p0, u64 ib_p0, u64 ab_p1, u64 ib_p1)
 	bus_index = (bus_index > 2) ? 1 : bus_index;
 
 	mdp_bus_usecases[bus_index].vectors[0].ab = min(ab_p0, mdp_max_bw);
-	ib_p0 = max(ib_p0, ab_p0);
-	mdp_bus_usecases[bus_index].vectors[0].ib = min(ib_p0, mdp_max_bw);
 
-	mdp_bus_usecases[bus_index].vectors[1].ab = min(ab_p1, mdp_max_bw);
-	ib_p1 = max(ib_p1, ab_p1);
-	mdp_bus_usecases[bus_index].vectors[1].ib = min(ib_p1, mdp_max_bw);
+   ib_p0 = max(ib_p0, ab_p0);
+   mdp_bus_usecases[bus_index].vectors[0].ib = min(ib_p0, mdp_max_bw);
 
+
+   mdp_bus_usecases[bus_index].vectors[1].ab = min(ab_p1, mdp_max_bw);
+   ib_p1 = max(ib_p1, ab_p1);
+   mdp_bus_usecases[bus_index].vectors[1].ib = min(ib_p1, mdp_max_bw);
+   
 	pr_debug("%s: handle=%d index=%d ab=%llu ib=%llu\n", __func__,
 		 (u32)mdp_bus_scale_handle, bus_index,
 		 mdp_bus_usecases[bus_index].vectors[0].ab,
@@ -2566,21 +2588,31 @@ int mdp_bus_scale_update_request(u64 ab_p0, u64 ib_p0, u64 ab_p1, u64 ib_p1)
 		(mdp_bus_scale_handle, bus_index);
 }
 
-static int mdp_bus_scale_restore_request(void)
-{
-	pr_debug("%s: index=%d ab_p0=%llu ib_p0=%llu\n", __func__, bus_index,
-		 mdp_bus_usecases[bus_index].vectors[0].ab,
-		 mdp_bus_usecases[bus_index].vectors[0].ib);
-	pr_debug("%s: index=%d ab_p1=%llu ib_p1=%llu\n", __func__, bus_index,
-		 mdp_bus_usecases[bus_index].vectors[1].ab,
-		 mdp_bus_usecases[bus_index].vectors[1].ib);
 
-	return mdp_bus_scale_update_request
-		(mdp_bus_usecases[bus_index].vectors[0].ab,
-		 mdp_bus_usecases[bus_index].vectors[0].ib,
-		 mdp_bus_usecases[bus_index].vectors[1].ab,
-		 mdp_bus_usecases[bus_index].vectors[1].ib);
-}
+int mdp_bus_scale_restore_request(void) 
+{ 
+	u64 ab, ib; 
+	if (!bus_index || 
+		!mdp_bus_usecases[bus_index].vectors[0].ab) { 
+		ab = mdp_max_bw; 
+		ib = mdp_max_bw; 
+	} else { 
+		ab = mdp_bus_usecases[bus_index].vectors[0].ab; 
+		ib = mdp_bus_usecases[bus_index].vectors[0].ib; 
+	} 
+	pr_info("%s: ab=%llu ib=%llu\n", __func__, ab, ib); 
+	
+	pr_debug("%s: index=%d ab_p0=%llu ib_p0=%llu\n", __func__, bus_index,
+					 mdp_bus_usecases[bus_index].vectors[0].ab,
+					 mdp_bus_usecases[bus_index].vectors[0].ib);
+	pr_debug("%s: index=%d ab_p1=%llu ib_p1=%llu\n", __func__, bus_index,
+					 mdp_bus_usecases[bus_index].vectors[1].ab,
+					 mdp_bus_usecases[bus_index].vectors[1].ib);
+	
+	return mdp_bus_scale_update_request(ab, ib,
+		mdp_bus_usecases[bus_index].vectors[1].ab,
+		mdp_bus_usecases[bus_index].vectors[1].ib); 
+} 
 #else
 static int mdp_bus_scale_restore_request(void)
 {
@@ -3129,10 +3161,8 @@ static int mdp_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	/* req bus bandwidth immediately */
-	mdp_bus_scale_update_request(mdp_max_bw,
-				     mdp_max_bw,
-				     mdp_max_bw,
-				     mdp_max_bw);
+	if (!(mfd->cont_splash_done))
+		mdp_bus_scale_update_request(mdp_max_bw, mdp_max_bw,mdp_max_bw,mdp_max_bw);
 #endif
 
 	/* set driver data */
